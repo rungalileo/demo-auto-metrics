@@ -1,9 +1,9 @@
 import streamlit as st
 import re
-import random
 
 from src.generator import MetricsGenerator, MetricsGenerationConfig, AppLabel
-
+from src.llm import LLMChat, AnthropicModel, OpenAIModel
+from src.prompt_templates import get_chat_system_prompt
 
 MODEL2NAME = {
     "gpt-4o": "OpenAI",
@@ -48,6 +48,14 @@ if 'api_keys' not in st.session_state:
     
 if 'show_api_modal' not in st.session_state:
     st.session_state.show_api_modal = False
+
+# Track which item is currently selected for Q&A
+if "selected_metric" not in st.session_state:
+    st.session_state.selected_metric = None
+
+# Chat histories per item
+if "chat_histories" not in st.session_state:
+    st.session_state.chat_histories = {}
 
 # Function to handle code view button click
 def view_code(index):
@@ -95,6 +103,26 @@ def generate_metrics_with_key():
         )
     st.session_state.metrics = metrics
 
+def initiate_chat_about_a_metric(metric_name, metric_description):
+    
+    selected_model = st.session_state.selected_model
+    api_key = st.session_state.api_keys[selected_model]
+
+    if selected_model == "gpt-4o":
+        model = OpenAIModel("gpt-4o", api_key=api_key)
+    else:
+        model = AnthropicModel('claude-3-7-sonnet-20250219', api_key=api_key)
+    
+    system_prompt = get_chat_system_prompt(
+        st.session_state.app_description,
+        st.session_state.selected_labels,
+        metric_name,
+        metric_description,
+    )
+    chat = LLMChat(model, system_prompt)
+
+    return chat
+
 # Function to properly format code with escaped newlines
 def format_code(code_str):
     # Replace escaped newlines with actual newlines
@@ -110,10 +138,7 @@ st.title("Automatic Metric Generation")
 # st.markdown("Demo for Galileo Auto-Metrics Generation.")
 
 # Input section
-st.header("Input Parameters")
-
-# 0. API Key
-# api_key = st.text_input("This demo makes calls to OpenAI. Enter the API key below (search for \"OpenAI API Key\" in 1Pass):", type="password")
+st.header("Inputs")
 
 # 1. Freeform text description
 st.session_state.app_description = st.text_area(
@@ -123,16 +148,16 @@ st.session_state.app_description = st.text_area(
 )
 
 # 2. Pregenerated labels
-label_options = ["RAG", "Agent", "Code Generation", "Multi-Turn"]
+label_options = ["RAG", "Agent"]
 st.session_state.selected_labels = st.multiselect(
     "Select relevant labels:", 
     label_options, 
-    default=["Agent", "Multi-Turn"],
+    default=["Agent"],
     key="labels_input"
 )
 
 # 3. Model selection
-model_options = ["gpt-4o", "claude-3.7"]
+model_options = ["claude-3.7", "gpt-4o"]
 st.session_state.selected_model = st.selectbox(
     "Select the model to use:", 
     model_options,
@@ -167,6 +192,9 @@ if st.session_state.has_generated:
     
     # Display metrics in expandable cards
     for i, metric in enumerate(st.session_state.metrics):
+        if metric.code:
+            continue  # don't show code metrics -- will deprecate
+
         with st.expander(f"{metric.name} - {metric.implementation}"):
             st.write(f"**Description:** {metric.description}")
             st.write(f"**Implementation mode:** {metric.implementation}")
@@ -180,26 +208,65 @@ if st.session_state.has_generated:
                     args=(i,)
                 )
 
+            if metric.implementation == "galileo":
+                if st.button("💬 Ask a Question", key=metric.name):
+                    st.session_state.selected_metric = metric.name
+                    if metric.name not in st.session_state.chat_histories:
+                        st.session_state.chat_histories[metric.name] = []
 
+
+# sidebar for Chat
+                    
+st.sidebar.title("Chat Support")
+if st.session_state.selected_metric:
+    metric_name = st.session_state.selected_metric
+    selected_metric = next((m for m in st.session_state.metrics if m.name == metric_name), None)
+
+    st.sidebar.title(f"Chat: {metric_name}")
+    st.sidebar.caption(selected_metric.description)
+
+    # # Display chat history for this item
+    # for msg in st.session_state.chat_histories[metric_name]:
+    #     with st.sidebar.chat_message(msg["role"]):
+    #         st.markdown(msg["content"])
+
+    chat = initiate_chat_about_a_metric(metric_name, selected_metric.description)
+
+    # Input box in sidebar
+    if prompt := st.sidebar.chat_input("Ask something. E.g., How is this metric computed?"):
+        # Save user message
+        # st.session_state.chat_histories[metric_name].append({"role": "user", "content": prompt})
+        with st.sidebar.chat_message("user"):
+            st.markdown(prompt)
+
+        # Dummy response — replace with actual LLM logic using item context
+        response = chat.query(prompt)
+        # response = f"Here's something about '{selected_item['title']}': Interesting question!"
+
+        # st.session_state.chat_histories[metric_name].append({"role": "assistant", "content": response})
+        with st.sidebar.chat_message("assistant"):
+            st.markdown(response)
+else:
+    st.sidebar.info("Click 'Ask a Question' on a metric to access chat support.")
 
 # Sidebar for code display
-st.sidebar.title("Code Implementation")
-if st.session_state.show_code_for is not None and st.session_state.metrics:
-    index = st.session_state.show_code_for
-    if 0 <= index < len(st.session_state.metrics):
-        metric = st.session_state.metrics[index]
+# st.sidebar.title("Code Implementation")
+# if st.session_state.show_code_for is not None and st.session_state.metrics:
+#     index = st.session_state.show_code_for
+#     if 0 <= index < len(st.session_state.metrics):
+#         metric = st.session_state.metrics[index]
         
-        if metric.code:
-            st.sidebar.subheader(f"Code for: {metric.name}")
-            st.sidebar.code(format_code(metric.code), language="python")
+#         if metric.code:
+#             st.sidebar.subheader(f"Code for: {metric.name}")
+#             st.sidebar.code(format_code(metric.code), language="python")
             
-            # Option to hide code
-            if st.sidebar.button("Hide Code"):
-                st.session_state.show_code_for = None
-        else:
-            st.sidebar.info("No code implementation available for this metric.")
-else:
-    st.sidebar.info("Click 'View Code Implementation' on a metric to see its code here.")
+#             # Option to hide code
+#             if st.sidebar.button("Hide Code"):
+#                 st.session_state.show_code_for = None
+#         else:
+#             st.sidebar.info("No code implementation available for this metric.")
+# else:
+#     st.sidebar.info("Click 'View Code Implementation' on a metric to see its code here.")
 
 # Option to reset API keys
 st.subheader("API Key Management")

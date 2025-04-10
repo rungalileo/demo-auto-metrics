@@ -1,89 +1,180 @@
 import os
-import json
-import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple, List
-from pydantic import BaseModel
+from typing import Any, Dict, Optional, List, Union, Callable, Tuple
 
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from anthropic import AsyncAnthropic, Anthropic
 
-from src.prompt_templates import LLMOutputSchema, AutoMetricLLMOutput
-from src.llm_tools.api_call import call_claude_3_7_sonnet_and_parse_with_retries
+from src.base_llm import APIGenerativeLLMModel
 from src.llm_tools.response_parsing import parse_response_text
 
-class OpenaiModel:
-    def __init__(self, model_name: str="gpt-4o-mini", api_key:Optional[str]=None):
-        self.model_name = model_name
+OPEN_AI_MODEL_PRICING = {
+    "gpt-4o-mini": {"input": 0.150 / 1e6, "cached_input": 0.075 / 1e6, "output": 0.600 / 1e6},
+    "gpt-4o": {"input": 2.50 / 1e6, "cached_input": 1.25 / 1e6, "output": 10.00 / 1e6},
+    "gpt-4.5": {"input": 75.00 / 1e6, "cached_input": 37.50 / 1e6, "output": 150.00 / 1e6},
+    "o1": {"input": 15.00 / 1e6, "cached_input": 7.50 / 1e6, "output": 60.00 / 1e6},
+    "o1-mini": {"input": 1.10 / 1e6, "cached_input": 0.55 / 1e6, "output": 4.40 / 1e6},
+    "o3-mini": {"input": 1.10 / 1e6, "cached_input": 0.55 / 1e6, "output": 4.40 / 1e6},
+}
 
-        if api_key:
-            self.client = OpenAI(api_key=api_key)
-        elif "OPENAI_API_KEY" in os.environ:
-            self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        else:
-            raise KeyError("OPENAI_API_KEY is not set. Either set the env variable, or pass it in as an argument.")
+class OpenAIModel(APIGenerativeLLMModel):
+    _api_key_name = "OPENAI_API_KEY"
+
+    def __init__(self, model_name:str, api_key: Optional[str]=None):
+        api_key = api_key or os.environ[self._api_key_name]
+        super().__init__(model_name, api_key)
+
+    def _get_response_text(self, model_response) -> str:
+        return model_response.choices[0].message.content
     
-    def generate_response(self, user_prompt:str, output_schema=Optional[LLMOutputSchema], temperature=1.0):
-        """
-        Args:
-            user_prompt (str): test to query the LLM with
-            output_schema (LLMOutputSchema): when provided will return parsed response
+    def _generate(self, client: Union[OpenAI, AsyncOpenAI], messages: List[Dict[str, str]], **kwargs)  -> Tuple[str, Dict[str, Any]]:
         
-        Returns
-            response
-            cost
-        """
-        messages=[{
-            "role": "user",
-            "content": user_prompt,
-        }]
+        response = client.chat.completions.create(
+            model = self.model_name,
+            messages = messages,
+            **kwargs
+        )
 
-        if output_schema:
-            completion = self.client.beta.chat.completions.parse(
-                model=self.model_name,
-                messages=messages,
-                temperature=temperature,
-                response_format=output_schema,
-            )
-            return completion.choices[0].message.parsed
-        else:
-            completion = self.client.chat.completions.create(
-                model=self.model_name,
-                temperature=temperature,
-                messages=messages,
-            )
-            parsed = parse_response_text(completion.choices[0].message.content)
-            return AutoMetricLLMOutput(**parsed)
+        response_text = self._get_response_text(response)
 
-class AnthropicModel:
-    def __init__(self, api_key:Optional[str]=None):
+        meta = {
+            "cost": self.calculate_cost(response),
+            "usage": response.usage,
+            "finish_reason": response.choices[0].finish_reason,
+        }
 
-        if api_key:
-            self.client = Anthropic(api_key=api_key)
-        elif "ANTHROPIC_API_KEY" in os.environ:
-            self.client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        else:
-            raise KeyError("ANTHROPIC_API_KEY is not set. Either set the env variable, or pass it in as an argument.")
+        try:
+            parsed_response = parse_response_text(response_text)
+        except:
+            parsed_response = None
 
-
-    def generate_response(self, user_prompt:str, **kwargs):
-        """
-        Args:
-            user_prompt (str): test to query the LLM with
-            output_schema (LLMOutputSchema): when provided will return parsed response
         
-        Returns
-            response
-            cost
+        return parsed_response or response_text, meta
+    
+    def generate(self, messages: List[Dict[str, str]], **kwargs) -> Tuple[str, Dict[str, Any]]:
         """
-        messages=[{
-            "role": "user",
-            "content": user_prompt,
-        }]
+
+        kwargs examples
+            reasoning_effort="medium",
+            temperature=1.0
+            
+        """
+        client = OpenAI(api_key=self.api_key)
+        return self._generate(client, messages, **kwargs)
+
+    async def a_generate(
+        self,
+        messages: List[Dict[str, str]],
+        callback:Optional[Callable]=None,
+        **kwargs
+    ) -> str:
+        client = AsyncOpenAI(api_key=self.api_key)
         
-        parsed_response = call_claude_3_7_sonnet_and_parse_with_retries(messages, self.client, max_tries=1)
-        if isinstance(parsed_response[0], str):
-            parsed_response = parse_response_text(parsed_response[0])
+        response_text, meta = self._generate(client, messages, **kwargs)
+    
+        if callback is not None:
+            callback()
+            
+        return response_text, meta
+
+        
+    def calculate_cost(self, model_response) -> float:
+        usage = model_response.usage
+        costs = OPEN_AI_MODEL_PRICING[self.model_name]
+
+        if hasattr(usage, 'cache_read_input_tokens'):
+            cached_tokens = usage.cache_read_input_tokens
+            input_tokens = usage.input_tokens
+            output_tokens = usage.output_tokens
         else:
-            parsed_response = parsed_response[0]
-        return AutoMetricLLMOutput(**parsed_response)
+            cached_tokens = usage.prompt_tokens_details.cached_tokens
+            input_tokens = usage.prompt_tokens - cached_tokens
+            output_tokens = usage.completion_tokens  # includes reasoning tokens
+
+    
+        return (
+            costs['input'] * input_tokens + 
+            costs['cached_input'] * cached_tokens + 
+            costs['output'] * output_tokens
+        )
+    
+
+class AnthropicModel(APIGenerativeLLMModel):
+    _api_key_name = "ANTHROPIC_API_KEY"
+
+    def __init__(self, model_name:str, api_key: Optional[str]=None):
+        api_key = api_key or os.environ[self._api_key_name]
+        super().__init__(model_name, api_key)
+
+    def _get_response_text(self, response):
+        return response.content[-1].text
+        
+    def generate(self, messages: List[Dict[str, str]], **kwargs) -> Tuple[str, Dict[str, Any]]:
+        """
+
+        kwargs examples
+            thinking=True
+            
+        """
+        client = Anthropic(api_key=self.api_key)
+
+        response = client.messages.create(
+            model = self.model_name,
+            messages = messages,
+            max_tokens = 5_000,
+            **kwargs
+        )
+
+        response_text = self._get_response_text(response)
+
+        meta = {
+            # "cost": self.calculate_cost(response),
+            # "usage": response.usage,
+            "finish_reason": response.stop_reason,
+        }
+        
+        try:
+            parsed_response = parse_response_text(response_text)
+        except:
+            parsed_response = None
+
+        return parsed_response or response_text, meta
+
+    async def a_generate(
+        self,
+        messages: List[Dict[str, str]],
+        callback:Optional[Callable]=None,
+        **kwargs
+    ) -> str:
+        # TODO
+        pass
+
+    def calculate_cost(self, model_response) -> float:
+        # TODO
+        pass
+
+
+class LLMChat:
+    def __init__(self, model, system_prompt):
+        self.model = model
+        self.chat_history = []
+
+        self.system_prompt = system_prompt
+
+        if isinstance(self.model, OpenAIModel):
+            self.chat_history.append({
+                "role":"system",
+                "content": system_prompt
+            })
+
+    def query(self, user_message, **kwargs):
+        self.chat_history.append({"role": "user", "content": user_message})
+        # print(self.chat_history)
+        if isinstance(self.model, OpenAIModel):
+            response_text, meta = self.model.generate(self.chat_history, **kwargs)
+        else:
+            response_text, meta = self.model.generate(self.chat_history, system=self.system_prompt, **kwargs)
+
+        self.chat_history.append({"role": "assistant", "content": response_text})
+        
+        return response_text

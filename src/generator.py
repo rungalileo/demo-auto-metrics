@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 from enum import Enum
 
-from src.llm import OpenaiModel, AnthropicModel
+from src.llm import OpenAIModel, AnthropicModel
 from src.prompt_templates import AutoMetricLLMOutput, get_filled_prompt
 
 
@@ -33,10 +33,9 @@ class MetricsGenerator:
         self.config = config
         self.is_async = False
         if config.model_name == "gpt-4o":
-            self.model = OpenaiModel(config.model_name, api_key=config.api_key) # assume its an openai model for now
+            self.model = OpenAIModel(config.model_name, api_key=config.api_key) # assume its an openai model for now
         elif 'claude' in config.model_name:
-            # self.is_async = True
-            self.model = AnthropicModel(api_key=config.api_key)
+            self.model = AnthropicModel('claude-3-7-sonnet-20250219', api_key=config.api_key)
         
     
     def generate(self):
@@ -47,12 +46,13 @@ class MetricsGenerator:
             # logs = "NA",
         )
 
-        response = self.model.generate_response(
-            filled_prompt,
-            output_schema=AutoMetricLLMOutput
-        )
 
-        return response
+        response, meta = self.model(filled_prompt)
+        # response = self.model.generate(
+        #     filled_prompt,
+        # )
+
+        return AutoMetricLLMOutput(**response) # response
 
     def results_to_markdown(self, llm_output:AutoMetricLLMOutput):
         md = ""

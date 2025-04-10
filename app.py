@@ -192,21 +192,21 @@ if st.session_state.has_generated:
     
     # Display metrics in expandable cards
     for i, metric in enumerate(st.session_state.metrics):
-        if metric.code:
-            continue  # don't show code metrics -- will deprecate
+        # if metric.code:
+        #     continue  # don't show code metrics -- will deprecate
 
         with st.expander(f"{metric.name} - {metric.implementation}"):
             st.write(f"**Description:** {metric.description}")
             st.write(f"**Implementation mode:** {metric.implementation}")
             
             # Code button only if implementation exists
-            if metric.code:
-                st.button(
-                    "View Code Implementation", 
-                    key=f"code_button_{i}",
-                    on_click=view_code,
-                    args=(i,)
-                )
+            # if metric.code:
+            #     st.button(
+            #         "View Code Implementation", 
+            #         key=f"code_button_{i}",
+            #         on_click=view_code,
+            #         args=(i,)
+            #     )
 
             if metric.implementation == "galileo":
                 if st.button("💬 Ask a Question", key=metric.name):

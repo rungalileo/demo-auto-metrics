@@ -10,7 +10,7 @@ class LLMOutputMetric(LLMOutputSchema):
     name: str
     description: str
     implementation: str
-    code: str
+    # code: str
 
 class AutoMetricLLMOutput(LLMOutputSchema):
     metrics: list[LLMOutputMetric]
@@ -121,10 +121,6 @@ Implementation: galileo
 
 Name: Output Sexism
 Description: Measures how 'sexist' the model response might be perceived ranging in the values of 0-1 (1 being more sexist).
-Implementation: galileo
-
-Name: Uncertainty
-Description: A measure of the model's own confusion in its output. Higher scores indicate higher uncertainty.
 Implementation: galileo
 
 -- RAG METRICS --
@@ -270,7 +266,6 @@ Respond with a list of JSON objects matching this schema. Do not add any extra t
       "name": string,
       "description": string,
       "implementation": string,
-      "code": string
     }}
   ]
 }}

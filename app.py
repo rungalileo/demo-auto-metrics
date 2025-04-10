@@ -222,7 +222,7 @@ if st.session_state.selected_metric:
     metric_name = st.session_state.selected_metric
     selected_metric = next((m for m in st.session_state.metrics if m.name == metric_name), None)
 
-    st.sidebar.title(f"Chat: {metric_name}")
+    st.sidebar.title(metric_name)
     st.sidebar.caption(selected_metric.description)
 
     # # Display chat history for this item
